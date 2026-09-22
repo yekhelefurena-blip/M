@@ -20,6 +20,13 @@ signal player_added(id: int, info: Dictionary, announce: bool)
 signal player_removed(id: int)
 signal state_received(id: int, pos: Vector3, yaw: float, speed: float, on_floor: bool, vy: float, dance: String)
 signal chat_received(id: int, sender: String, text: String)
+## Studio: publishing a level, the list of published levels, a level someone
+## else just published while we were looking (live, no refresh needed), and
+## the full data of one level we asked to play.
+signal level_published_result(ok: bool, message: String)
+signal levels_list_received(list: Array)
+signal level_added_live(meta: Dictionary)
+signal level_data_received(meta: Dictionary, data: Dictionary)
 
 enum State { OFFLINE, CONNECTING, ONLINE, FAILED }
 
@@ -36,6 +43,18 @@ const KICK_UNREGISTERED_AFTER := 6.0
 ## redeployed or fully recreated (a normal sleep/wake from being idle is
 ## usually fine — it's a fresh deploy that risks it).
 const ACCOUNTS_PATH := "user://accounts.json"
+## Community levels (Studio): the server keeps every published level as its
+## own small JSON file, plus one index file with the title/author list (so
+## it doesn't have to open every level file just to answer "what's out
+## there?"). Same disk-persistence caveat as accounts, above.
+const LEVELS_DIR := "user://levels/"
+const LEVELS_INDEX_PATH := "user://levels_index.json"
+const MAX_LEVELS := 400          # oldest is dropped once the server hits this many
+const MAX_LEVEL_CELLS := 240
+const MAX_LEVEL_SCRIPT_LEN := 600
+const LEVEL_TITLE_MAX := 24
+const LEVEL_CELL_TYPES := ["platform", "wall", "ramp", "coin", "bounce", "speed", "start", "finish", "trigger"]
+const HEIGHT_CELL_TYPES := ["platform", "wall"]
 
 var is_server := false
 var state := State.OFFLINE
@@ -44,6 +63,10 @@ var last_error := ""
 var players := {}
 ## Server only: username (lowercase) -> SHA-256 password hash.
 var accounts := {}
+## Server only: level id (String) -> {"title", "author", "cells": count}.
+var levels_index := {}
+var _levels_order: Array = []    # ids in publish order, oldest first (for the MAX_LEVELS cap)
+var _next_level_id := 1
 
 var _join_info := {}
 var _last_chat := {} # server: id -> last chat time (msec)
@@ -108,9 +131,11 @@ func _clean_info(info: Dictionary) -> Dictionary:
 		var c = info.get(key)
 		out[key] = c if typeof(c) == TYPE_COLOR else Color(0.8, 0.8, 0.8)
 	var walk = info.get("walk", 0)
-	out["walk"] = clampi(int(walk), 0, 2) if typeof(walk) == TYPE_INT else 0
+	out["walk"] = clampi(int(walk), 0, 3) if typeof(walk) == TYPE_INT else 0
 	var aura = info.get("aura", false)
 	out["aura"] = aura if typeof(aura) == TYPE_BOOL else false
+	var shirt = info.get("shirt", "")
+	out["shirt"] = String(shirt) if Customization.shirt_tex_for_id(String(shirt)) != "" else ""
 	return out
 
 
@@ -157,7 +182,80 @@ func _start_server(port: int) -> void:
 	is_server = true
 	Engine.max_fps = 30
 	_load_accounts()
-	print("Blocky World server listening on port %d (%d accounts on file)" % [port, accounts.size()])
+	_load_levels_index()
+	print("Blocky World server listening on port %d (%d accounts, %d levels on file)" % [port, accounts.size(), levels_index.size()])
+
+
+func _load_levels_index() -> void:
+	DirAccess.make_dir_recursive_absolute(LEVELS_DIR)
+	if not FileAccess.file_exists(LEVELS_INDEX_PATH):
+		return
+	var f := FileAccess.open(LEVELS_INDEX_PATH, FileAccess.READ)
+	if f == null:
+		return
+	var parsed = JSON.parse_string(f.get_as_text())
+	if parsed is Dictionary:
+		levels_index = parsed.get("levels", {})
+		_levels_order = parsed.get("order", [])
+		_next_level_id = int(parsed.get("seq", 1))
+
+
+func _save_levels_index() -> void:
+	var f := FileAccess.open(LEVELS_INDEX_PATH, FileAccess.WRITE)
+	if f == null:
+		return
+	f.store_string(JSON.stringify({"levels": levels_index, "order": _levels_order, "seq": _next_level_id}))
+
+
+func _level_path(id: String) -> String:
+	return LEVELS_DIR + id + ".json"
+
+
+## Cheap structural check — types, ranges, sizes — before anything touches
+## disk or gets relayed to other players. A level that fails this is
+## rejected with a reason; nothing partial is ever saved.
+func _sanitize_level(data: Dictionary) -> Variant:
+	var raw = data.get("cells", [])
+	if typeof(raw) != TYPE_ARRAY or raw.size() == 0 or raw.size() > MAX_LEVEL_CELLS:
+		return null
+	var cells: Array = []
+	var has_start := false
+	var has_finish := false
+	for c in raw:
+		if typeof(c) != TYPE_DICTIONARY:
+			return null
+		var t := String(c.get("t", ""))
+		if t not in LEVEL_CELL_TYPES:
+			return null
+		var x = c.get("x")
+		var y = c.get("y")
+		if typeof(x) not in [TYPE_INT, TYPE_FLOAT] or typeof(y) not in [TYPE_INT, TYPE_FLOAT]:
+			return null
+		x = clampi(int(x), 0, 63)
+		y = clampi(int(y), 0, 63)
+		var e := {"x": x, "y": y, "t": t}
+		if t == "start":
+			has_start = true
+		elif t == "finish":
+			has_finish = true
+		elif t == "trigger" and c.has("s"):
+			e["s"] = _clean_text(String(c["s"]), MAX_LEVEL_SCRIPT_LEN)
+		elif t == "ramp" and c.has("r"):
+			var rv = c.get("r")
+			if typeof(rv) in [TYPE_INT, TYPE_FLOAT]:
+				e["r"] = ((int(rv) % 4) + 4) % 4
+		elif t in HEIGHT_CELL_TYPES and c.has("h"):
+			var hv = c.get("h")
+			if typeof(hv) in [TYPE_INT, TYPE_FLOAT]:
+				e["h"] = clampi(int(hv), 1, 4)
+		cells.append(e)
+	if not has_start or not has_finish:
+		return null
+	return {
+		"n": clampi(int(data.get("n", 16)), 4, 64), "cells": cells,
+		"speed_mult": clampf(float(data.get("speed_mult", 1.0)), 0.6, 1.8),
+		"jump_mult": clampf(float(data.get("jump_mult", 1.0)), 0.6, 1.8),
+	}
 
 
 func _load_accounts() -> void:
@@ -279,7 +377,93 @@ func send_chat(text: String) -> void:
 	_last_chat[id] = now
 	var nm := String(players[id]["name"])
 	print("[chat] %s: %s" % [nm, clean])
-	_recv_chat.rpc(id, nm, clean)
+	# only to players who have joined (a peer that hasn't introduced itself yet must not see the chat)
+	for pid in players:
+		_recv_chat.rpc_id(pid, id, nm, clean)
+
+
+## Client -> server: publish a Studio level. Stored on disk right away and
+## announced to every connected player (see _level_added below), so a new
+## level shows up for everyone immediately — nobody needs to update the app.
+@rpc("any_peer", "call_remote", "reliable")
+func publish_level(meta: Dictionary, data: Dictionary) -> void:
+	if not is_server:
+		return
+	var id := multiplayer.get_remote_sender_id()
+	if not players.has(id):
+		return
+	var clean := _sanitize_level(data)
+	if clean == null:
+		_level_published.rpc_id(id, false, "invalid")
+		return
+	if levels_index.size() >= MAX_LEVELS and _levels_order.size() > 0:
+		var oldest: String = _levels_order.pop_front()
+		levels_index.erase(oldest)
+		var old_f := _level_path(oldest)
+		if FileAccess.file_exists(old_f):
+			DirAccess.remove_absolute(old_f)
+	var title := _clean_text(String(meta.get("title", "")), LEVEL_TITLE_MAX)
+	if title == "":
+		title = "Untitled"
+	var author := _clean_text(String(meta.get("author", String(players[id]["name"]))), NAME_MAX)
+	var lvl_id := str(_next_level_id)
+	_next_level_id += 1
+	var f := FileAccess.open(_level_path(lvl_id), FileAccess.WRITE)
+	if f == null:
+		_level_published.rpc_id(id, false, "save_failed")
+		return
+	f.store_string(JSON.stringify(clean))
+	var idx_entry := {"title": title, "author": author, "cells": clean["cells"].size()}
+	levels_index[lvl_id] = idx_entry
+	_levels_order.append(lvl_id)
+	_save_levels_index()
+	print("[server] level published: \"%s\" by %s (%d cells)" % [title, author, idx_entry["cells"]])
+	_level_published.rpc_id(id, true, "ok")
+	var live := idx_entry.duplicate()
+	live["id"] = lvl_id
+	for pid in players:
+		_level_added.rpc_id(pid, live)
+
+
+## Client -> server: "what levels are out there?" — the full title/author list.
+@rpc("any_peer", "call_remote", "reliable")
+func request_levels() -> void:
+	if not is_server:
+		return
+	var id := multiplayer.get_remote_sender_id()
+	if not players.has(id):
+		return
+	var out: Array = []
+	for i in range(_levels_order.size() - 1, -1, -1): # newest first
+		var lid: String = _levels_order[i]
+		if levels_index.has(lid):
+			var e: Dictionary = levels_index[lid].duplicate()
+			e["id"] = lid
+			out.append(e)
+	_levels_list.rpc_id(id, out)
+
+
+## Client -> server: "send me level X" (about to play it).
+@rpc("any_peer", "call_remote", "reliable")
+func request_level(id_str: String) -> void:
+	if not is_server:
+		return
+	var id := multiplayer.get_remote_sender_id()
+	if not players.has(id):
+		return
+	if not levels_index.has(id_str):
+		_level_data.rpc_id(id, {}, {})
+		return
+	var f := FileAccess.open(_level_path(id_str), FileAccess.READ)
+	if f == null:
+		_level_data.rpc_id(id, {}, {})
+		return
+	var parsed = JSON.parse_string(f.get_as_text())
+	if not (parsed is Dictionary):
+		_level_data.rpc_id(id, {}, {})
+		return
+	var meta: Dictionary = levels_index[id_str]
+	_level_data.rpc_id(id, meta, parsed)
 
 
 # ------------------------------------------------------------------- client
@@ -388,3 +572,26 @@ func _recv_state(id: int, pos: Vector3, yaw: float, speed: float, on_floor: bool
 @rpc("authority", "call_remote", "reliable")
 func _recv_chat(id: int, sender: String, text: String) -> void:
 	chat_received.emit(id, sender, text)
+
+
+## Server -> client: result of our publish_level() call above. `code` is
+## "ok" | "invalid" | "save_failed" — studio.gd turns that into the message
+## shown on screen, in whichever language the player is using.
+@rpc("authority", "call_remote", "reliable")
+func _level_published(ok: bool, code: String) -> void:
+	level_published_result.emit(ok, code)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _levels_list(list: Array) -> void:
+	levels_list_received.emit(list)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _level_added(meta: Dictionary) -> void:
+	level_added_live.emit(meta)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _level_data(meta: Dictionary, data: Dictionary) -> void:
+	level_data_received.emit(meta, data)

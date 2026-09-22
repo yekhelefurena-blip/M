@@ -47,7 +47,12 @@ var toast_tween: Tween
 var score := 0 # mirrors Customization.coins (saved between sessions)
 var best := 0
 var coins: Array[Node3D] = []
-var coin_mat: StandardMaterial3D
+var coin_mat: StandardMaterial3D     # bright face (also used for the pickup sparks)
+var coin_rim_mat: StandardMaterial3D # darker outer rim
+var coin_gem_mat: StandardMaterial3D # little diamond in the middle
+var _coin_rim_mesh: CylinderMesh
+var _coin_face_mesh: CylinderMesh
+var _coin_gem_mesh: BoxMesh
 var blades: Node3D
 var clouds: Array[Node3D] = []
 var npcs: Array = []
@@ -79,6 +84,29 @@ var parkour_fall_y := -20.0
 var parkour_bounds_limit := 60.0
 var parkour_time := 0.0
 
+## Community level (Studio) — a level someone published, played through the
+## "ألعاب اللاعبين" browser. Built fresh from JSON every time (see
+## _build_community_level below), never as code, so a level published by
+## anyone else can only ever place the six kinds of block level_script.gd's
+## actions and the cells below allow — nothing it contains can run on your
+## device as a script.
+const COMMUNITY_ORIGIN := Vector3(0.0, 0.0, 700.0) # tucked far from everything else
+const COMMUNITY_CELL := 3.0
+var community_root: Node3D
+var community_title := ""
+var community_author := ""
+var community_grid_n := 16
+var community_spawn := Vector3.ZERO
+var community_bounds_limit := 60.0
+var community_speed_mult := 1.0     # the level's own setting (Studio "Player speed")
+var community_jump_mult := 1.0      # the level's own setting (Studio "Player jump")
+var community_finishes: Array = []  # [Vector2(x,z), ...] world-space finish points
+var community_triggers: Array = []  # [{"pos":Vector2, "actions":[...], "armed":bool}, ...]
+var community_timers: Array = []    # [{"t":float, "action":{...}, "fired":bool}, ...]
+var community_time := 0.0
+var community_ended := false
+var _temp_speed_until := 0.0        # a speed-pad boost reverts to the level's own setting after this
+
 
 func _ready() -> void:
 	DisplayServer.screen_set_orientation(DisplayServer.SCREEN_SENSOR_LANDSCAPE)
@@ -103,43 +131,77 @@ func _ready() -> void:
 		Rect2(-90, -80, 55, 55),   # mountain
 	]
 
-	_setup_environment()
-	_build_ground()
-	_build_river()
-	_build_path()
-	_build_desert()
-	_build_mountains()
-	_build_castle()
-	_build_village()
-	_build_minigames_building()
-	_build_signs_and_chill()
-	_build_windmill()
-	_build_trees()
-	_build_flowers()
-	_build_clouds()
+	var community_level := Studio.consume_pending() # {} unless we came from "ألعاب اللاعبين"
+	var is_community := not community_level.is_empty()
 
+	_setup_environment()
+	if not is_community:
+		_build_ground()
+		_build_river()
+		_build_path()
+		_build_desert()
+		_build_mountains()
+		_build_castle()
+		_build_village()
+		_build_minigames_building()
+		_build_signs_and_chill()
+		_build_windmill()
+		_build_trees()
+		_build_flowers()
+		_build_clouds()
+
+	# Coin look: darker rim, bright raised face, small diamond in the middle.
+	# (the meshes and materials are shared by every coin)
 	coin_mat = StandardMaterial3D.new()
-	coin_mat.albedo_color = Color(1.0, 0.8, 0.1)
+	coin_mat.albedo_color = Color(1.0, 0.85, 0.2)
 	coin_mat.emission_enabled = true
-	coin_mat.emission = Color(0.9, 0.6, 0.0)
+	coin_mat.emission = Color(0.95, 0.65, 0.05)
 	coin_mat.emission_energy_multiplier = 0.7
+	coin_rim_mat = StandardMaterial3D.new()
+	coin_rim_mat.albedo_color = Color(0.9, 0.55, 0.05)
+	coin_rim_mat.emission_enabled = true
+	coin_rim_mat.emission = Color(0.6, 0.3, 0.0)
+	coin_rim_mat.emission_energy_multiplier = 0.5
+	coin_gem_mat = StandardMaterial3D.new()
+	coin_gem_mat.albedo_color = Color(1.0, 0.97, 0.7)
+	coin_gem_mat.emission_enabled = true
+	coin_gem_mat.emission = Color(1.0, 0.9, 0.4)
+	coin_gem_mat.emission_energy_multiplier = 1.0
+	_coin_rim_mesh = CylinderMesh.new()
+	_coin_rim_mesh.top_radius = 0.6
+	_coin_rim_mesh.bottom_radius = 0.6
+	_coin_rim_mesh.height = 0.16
+	_coin_rim_mesh.radial_segments = 16
+	_coin_face_mesh = CylinderMesh.new()
+	_coin_face_mesh.top_radius = 0.46
+	_coin_face_mesh.bottom_radius = 0.46
+	_coin_face_mesh.height = 0.22
+	_coin_face_mesh.radial_segments = 16
+	_coin_gem_mesh = BoxMesh.new()
+	_coin_gem_mesh.size = Vector3(0.24, 0.3, 0.24)
 
 	_spawn_player()
 	player.landed.connect(_on_player_landed)
 	_spawn_camera()
-	_spawn_npcs()
-	_spawn_start_coins()
+	if not is_community:
+		_spawn_npcs()
+		_spawn_start_coins()
 	_build_hud()
 	online = OnlineScript.new()
 	add_child(online)
 	online.setup(self)
 	controls.chat_lines = online.chat_lines
-	_build_parkour_world()
+	if not is_community:
+		_build_parkour_world()
 	_setup_audio()
 	_load_best()
 	score = Customization.coins
 	_update_hud()
-	toast("Welcome! Step on the MINIGAMES pad to choose Coin Rush or Parkour", 4.0)
+	if is_community:
+		_build_community_level(community_level)
+		_start_community()
+	else:
+		toast("Welcome! Step on the MINIGAMES pad to choose Coin Rush or Parkour", 4.0)
 
 
 # ----------------------------------------------------------------- helpers
@@ -306,10 +368,10 @@ func _build_path() -> void:
 
 func _build_desert() -> void:
 	flat(26.0, 100.0, -72.0, 28.0, 0.05, Color(0.93, 0.85, 0.55))
-	var tan := Color(0.85, 0.75, 0.5)
+	var sandstone := Color(0.85, 0.75, 0.5)
 	for i in 5:
 		var s := 26.0 - i * 5.0
-		block(Vector3(56, 1.0 + i * 2.0, -28), Vector3(s, 2, s), tan)
+		block(Vector3(56, 1.0 + i * 2.0, -28), Vector3(s, 2, s), sandstone)
 	block(Vector3(56, 1.5, -14.9), Vector3(3, 3, 0.3), Color(0.25, 0.15, 0.1), false)
 	# cacti
 	var placed := 0
@@ -593,16 +655,22 @@ func _spawn_coin(pos: Vector3, mini: bool = false) -> void:
 	var holder := Node3D.new()
 	holder.position = pos
 	var mi := MeshInstance3D.new()
-	var cm := CylinderMesh.new()
-	cm.top_radius = 0.55
-	cm.bottom_radius = 0.55
-	cm.height = 0.14
-	cm.radial_segments = 12
-	mi.mesh = cm
+	mi.mesh = _coin_rim_mesh
 	mi.rotation_degrees.x = 90.0
-	mi.material_override = coin_mat
+	mi.material_override = coin_rim_mat
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	holder.add_child(mi)
+	var face := MeshInstance3D.new()
+	face.mesh = _coin_face_mesh
+	face.material_override = coin_mat
+	face.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.add_child(face)
+	var gem := MeshInstance3D.new()
+	gem.mesh = _coin_gem_mesh
+	gem.rotation_degrees.y = 45.0
+	gem.material_override = coin_gem_mat
+	gem.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.add_child(gem)
 	holder.set_meta("mini", mini)
 	holder.set_meta("y0", pos.y)
 	world_root.add_child(holder)
@@ -841,6 +909,7 @@ func _on_shadows() -> void:
 
 func _on_home() -> void:
 	Net.leave()
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	get_tree().change_scene_to_file("res://home.tscn")
 
 
@@ -1010,6 +1079,221 @@ func _leave_parkour() -> void:
 	toast("Back from Parkour!  %.1f s" % parkour_time, 2.5)
 
 
+# --------------------------------------------------------- community level
+
+## Builds a level published from the Studio, purely from its JSON data (see
+## studio.gd's _level_dict()) — never as code, so nothing in `level` can do
+## anything beyond placing the handful of block kinds and running the
+## handful of level_script.gd actions handled in _run_level_action below.
+func _build_community_level(level: Dictionary) -> void:
+	var meta: Dictionary = level.get("meta", {})
+	var data: Dictionary = level.get("data", {})
+	community_title = String(meta.get("title", "Level"))
+	community_author = String(meta.get("author", "?"))
+	community_speed_mult = clampf(float(data.get("speed_mult", 1.0)), 0.5, 2.0)
+	community_jump_mult = clampf(float(data.get("jump_mult", 1.0)), 0.5, 2.0)
+	community_grid_n = clampi(int(data.get("n", 16)), 4, 64)
+	community_finishes.clear()
+	community_triggers.clear()
+	community_timers.clear()
+
+	community_root = Node3D.new()
+	community_root.name = "CommunityLevel"
+	add_child(community_root)
+
+	var cell := COMMUNITY_CELL
+	var n := community_grid_n
+	var origin := COMMUNITY_ORIGIN - Vector3(float(n) * cell * 0.5, 0.0, float(n) * cell * 0.5)
+	var ground_size := float(n) * cell + 14.0
+	block(COMMUNITY_ORIGIN - Vector3(0.0, 1.0, 0.0), Vector3(ground_size, 2.0, ground_size),
+		Color(0.30, 0.55, 0.30), true, community_root)
+
+	community_spawn = COMMUNITY_ORIGIN + Vector3(0.0, 1.0, 0.0) # used if the level has no Start (shouldn't happen)
+	for c in data.get("cells", []):
+		var gx := int(c.get("x", 0))
+		var gy := int(c.get("y", 0))
+		var t := String(c.get("t", ""))
+		var wp: Vector3 = origin + Vector3((float(gx) + 0.5) * cell, 0.0, (float(gy) + 0.5) * cell)
+		match t:
+			"platform":
+				var h := float(clampi(int(c.get("h", 1)), 1, 4))
+				block(wp + Vector3(0.0, h - 0.2, 0.0), Vector3(cell - 0.1, 0.4, cell - 0.1),
+					Color(0.62, 0.66, 0.72), true, community_root)
+			"wall":
+				var h2 := float(clampi(int(c.get("h", 1)), 1, 4))
+				block(wp + Vector3(0.0, h2 * 0.5, 0.0), Vector3(cell - 0.1, h2, cell - 0.1),
+					Color(0.36, 0.40, 0.45), true, community_root)
+			"ramp":
+				_build_ramp(wp, int(c.get("r", 0)) % 4, cell)
+			"coin":
+				_spawn_coin(wp + Vector3(0.0, 1.2, 0.0)) # lives under world_root, like any other coin
+			"start":
+				community_spawn = wp + Vector3(0.0, 1.0, 0.0)
+			"finish":
+				flat(wp.x - cell * 0.4, wp.x + cell * 0.4, wp.z - cell * 0.4, wp.z + cell * 0.4, 0.05, Color(0.85, 0.25, 0.2))
+				community_finishes.append(Vector2(wp.x, wp.z))
+			"bounce":
+				_pad(wp, cell, Color(0.18, 0.75, 0.85))
+				community_triggers.append({"pos": Vector2(wp.x, wp.z), "actions": [{"op": "bounce"}], "armed": true})
+			"speed":
+				_pad(wp, cell, Color(1.0, 0.55, 0.25))
+				community_triggers.append({"pos": Vector2(wp.x, wp.z), "actions": [{"op": "speed", "mult": 1.6, "secs": 3.0}], "armed": true})
+			"trigger":
+				var parsed := LevelScript.parse(String(c.get("s", "")))
+				var mk := block(wp + Vector3(0.0, 0.55, 0.0), Vector3(cell * 0.5, 1.1, cell * 0.5),
+					Color(0.48, 0.36, 1.0), false, community_root)
+				mk.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+				if parsed["touch"].size() > 0:
+					community_triggers.append({"pos": Vector2(wp.x, wp.z), "actions": parsed["touch"], "armed": true})
+				for te in parsed["timers"]:
+					community_timers.append({"t": float(te["t"]), "action": te["action"], "fired": false})
+
+	community_bounds_limit = float(n) * cell * 0.5 + 14.0
+
+
+## A flat, glowing, non-colliding pad — the visual for Bounce Pad / Speed Pad.
+## Its own material (not the shared mat() cache other blocks use), since it
+## needs emission glow that shouldn't leak onto anything else that colour.
+func _pad(wp: Vector3, cell: float, color: Color) -> void:
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(cell * 0.84, 0.08, cell * 0.84)
+	mi.mesh = bm
+	mi.position = wp + Vector3(0.0, 0.04, 0.0)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var m := StandardMaterial3D.new()
+	m.albedo_color = color
+	m.emission_enabled = true
+	m.emission = color
+	m.emission_energy_multiplier = 0.9
+	mi.material_override = m
+	community_root.add_child(mi)
+
+
+## A simple ramp: a tilted box climbing 1 unit across one grid cell. `r`
+## (0..3) picks which side is the low edge. The tilt sign is my best
+## reading of Godot's rotation convention — since I can't run the editor
+## myself, open the Studio and check a ramp climbs the way its arrow points;
+## if any direction is backwards, flip the sign on the `-angle` below.
+func _build_ramp(center: Vector3, r: int, cell: float) -> void:
+	var rise := 1.0
+	var slope_len := sqrt(cell * cell + rise * rise)
+	var angle := atan2(rise, cell)
+	var holder := Node3D.new()
+	holder.position = center
+	holder.rotation.y = float(r) * PI * 0.5
+	community_root.add_child(holder)
+
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(cell - 0.1, 0.25, slope_len)
+	mi.mesh = bm
+	mi.material_override = mat(Color(0.55, 0.42, 0.28))
+	mi.transform = Transform3D(Basis(Vector3(1.0, 0.0, 0.0), -angle), Vector3(0.0, rise * 0.5, 0.0))
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	holder.add_child(mi)
+
+	var body := StaticBody3D.new()
+	body.transform = mi.transform
+	var cs := CollisionShape3D.new()
+	var bs := BoxShape3D.new()
+	bs.size = bm.size
+	cs.shape = bs
+	body.add_child(cs)
+	holder.add_child(body)
+
+
+func _start_community() -> void:
+	game_mode = "community"
+	community_time = 0.0
+	community_ended = false
+	_temp_speed_until = 0.0
+	for t in community_triggers:
+		t["armed"] = true
+	for te in community_timers:
+		te["fired"] = false
+	player.bounds_center = Vector2(COMMUNITY_ORIGIN.x, COMMUNITY_ORIGIN.z)
+	player.bounds_limit = community_bounds_limit
+	player.respawn_pos = community_spawn
+	player.fall_y = COMMUNITY_ORIGIN.y - 20.0
+	player.position = community_spawn
+	player.velocity = Vector3.ZERO
+	player.speed_mult = community_speed_mult
+	player.jump_mult = community_jump_mult
+	toast("%s  —  %s %s" % [community_title, ("by" if Customization.lang != "ar" else "بواسطة"), community_author], 3.5)
+
+
+func _community_win() -> void:
+	if community_ended:
+		return
+	community_ended = true
+	_add_coins(10)
+	toast(("🏁 You made it!  +10 coins" if Customization.lang != "ar" else "🏁 وصلت! +10 عملات"), 3.0)
+
+
+## Runs one action from a trigger / timer's script — see level_script.gd for
+## the fixed, whitelisted set this can ever be. `op` values other than the
+## ones below (there are none) are simply ignored.
+func _run_level_action(action: Dictionary) -> void:
+	match String(action.get("op", "")):
+		"give_coins":
+			var n := int(action.get("n", 1))
+			_add_coins(n)
+			toast("+%d" % n, 1.2)
+		"lose_coins":
+			var n2 := int(action.get("n", 1))
+			Customization.add_coins(-n2)
+			score = Customization.coins
+			toast("-%d" % n2, 1.2)
+		"win":
+			_community_win()
+		"lose":
+			player.position = community_spawn
+			player.velocity = Vector3.ZERO
+			toast(("Try again!" if Customization.lang != "ar" else "حاول مرة ثانية!"), 1.4)
+		"message":
+			toast(String(action.get("text", "")), 2.4)
+		"teleport":
+			var n3 := community_grid_n
+			var origin2 := COMMUNITY_ORIGIN - Vector3(float(n3) * COMMUNITY_CELL * 0.5, 0.0, float(n3) * COMMUNITY_CELL * 0.5)
+			player.position = origin2 + Vector3(
+				(float(action.get("gx", 0.0)) + 0.5) * COMMUNITY_CELL, 1.0,
+				(float(action.get("gy", 0.0)) + 0.5) * COMMUNITY_CELL)
+			player.velocity = Vector3.ZERO
+		"speed":
+			player.speed_mult = community_speed_mult * float(action.get("mult", 1.0))
+			_temp_speed_until = community_time + float(action.get("secs", 2.0))
+		"bounce":
+			player.velocity.y = PlayerScript.JUMP_VELOCITY * community_jump_mult * 1.6
+
+
+func _update_community(delta: float) -> void:
+	community_time += delta
+	if community_time >= _temp_speed_until and not is_equal_approx(player.speed_mult, community_speed_mult):
+		player.speed_mult = community_speed_mult
+
+	for te in community_timers:
+		if not te["fired"] and community_time >= float(te["t"]):
+			te["fired"] = true
+			_run_level_action(te["action"])
+
+	var pxz := Vector2(player.position.x, player.position.z)
+	for t in community_triggers:
+		var d: float = pxz.distance_to(t["pos"])
+		if d < 1.8 and t["armed"]:
+			t["armed"] = false
+			for a in t["actions"]:
+				_run_level_action(a)
+		elif d > 2.6:
+			t["armed"] = true
+
+	if not community_ended:
+		for f in community_finishes:
+			if pxz.distance_to(f) < 1.8:
+				_community_win()
+				break
+
+
 ## Every coin you earn is saved right away (Customization keeps the wallet).
 func _add_coins(n: int) -> void:
 	Customization.add_coins(n)
@@ -1102,17 +1386,17 @@ func _process(delta: float) -> void:
 	cam_pivot.rotation.y = cam_yaw
 	cam_arm.rotation.x = cam_pitch
 
-	# world animation
-	blades.rotation.z += delta * 0.8
-	for c in clouds:
-		c.position.x += delta * 1.5
-		if c.position.x > 170.0:
-			c.position.x -= 340.0
-	pad_mat.emission_energy_multiplier = 0.9 + 0.5 * sin(time_acc * 4.0)
-	pad_gem.rotation.y += delta * 2.0
-	pad_gem.position.y = 2.2 + sin(time_acc * 2.5) * 0.25
-
-	_update_npcs(delta)
+	# world animation (the open world only — a community level has none of this)
+	if game_mode != "community":
+		blades.rotation.z += delta * 0.8
+		for c in clouds:
+			c.position.x += delta * 1.5
+			if c.position.x > 170.0:
+				c.position.x -= 340.0
+		pad_mat.emission_energy_multiplier = 0.9 + 0.5 * sin(time_acc * 4.0)
+		pad_gem.rotation.y += delta * 2.0
+		pad_gem.position.y = 2.2 + sin(time_acc * 2.5) * 0.25
+		_update_npcs(delta)
 
 	# coins
 	var pp: Vector3 = player.position + Vector3(0.0, 1.0, 0.0)
@@ -1133,36 +1417,39 @@ func _process(delta: float) -> void:
 		if c.position.distance_to(pp) < 1.7:
 			_collect(i)
 
-	# minigame pad — steps on it open a two-option choice, never auto-start
-	var pad_dist := Vector2(player.position.x, player.position.z).distance_to(Vector2(MINI_PAD.x, MINI_PAD.z))
-	if pad_dist > 5.0:
-		if not pad_armed:
-			pad_armed = true
-		if controls.menu_open:
-			controls.close_game_menu()
-	elif pad_armed and pad_dist < 2.6 and game_mode == "none" and not chat_open:
-		controls.open_game_menu()
-		pad_armed = false
-	if game_active:
-		game_time -= delta
-		if game_time <= 0.0:
-			_end_game()
-	elif game_mode == "parkour":
-		parkour_time += delta
-
-	# chill zone bonus: stand still for 3 seconds
-	chill_cooldown = maxf(0.0, chill_cooldown - delta)
-	var pxz := Vector2(player.position.x, player.position.z)
-	if CHILL_RECT.has_point(pxz):
-		var still := Vector2(player.velocity.x, player.velocity.z).length() < 0.5
-		chill_timer = chill_timer + delta if still else 0.0
-		if chill_timer >= 3.0 and chill_cooldown <= 0.0:
-			_add_coins(5)
-			chill_cooldown = 20.0
-			chill_timer = 0.0
-			toast("So relaxing...  +5 coins", 2.5)
+	if game_mode == "community":
+		_update_community(delta)
 	else:
-		chill_timer = 0.0
+		# minigame pad — steps on it open a two-option choice, never auto-start
+		var pad_dist := Vector2(player.position.x, player.position.z).distance_to(Vector2(MINI_PAD.x, MINI_PAD.z))
+		if pad_dist > 5.0:
+			if not pad_armed:
+				pad_armed = true
+			if controls.menu_open:
+				controls.close_game_menu()
+		elif pad_armed and pad_dist < 2.6 and game_mode == "none" and not chat_open:
+			controls.open_game_menu()
+			pad_armed = false
+		if game_active:
+			game_time -= delta
+			if game_time <= 0.0:
+				_end_game()
+		elif game_mode == "parkour":
+			parkour_time += delta
+
+		# chill zone bonus: stand still for 3 seconds
+		chill_cooldown = maxf(0.0, chill_cooldown - delta)
+		var pxz := Vector2(player.position.x, player.position.z)
+		if CHILL_RECT.has_point(pxz):
+			var still := Vector2(player.velocity.x, player.velocity.z).length() < 0.5
+			chill_timer = chill_timer + delta if still else 0.0
+			if chill_timer >= 3.0 and chill_cooldown <= 0.0:
+				_add_coins(5)
+				chill_cooldown = 20.0
+				chill_timer = 0.0
+				toast("So relaxing...  +5 coins", 2.5)
+		else:
+			chill_timer = 0.0
 
 	_update_hud()
 

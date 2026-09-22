@@ -420,9 +420,12 @@ func _g_home(col: Color) -> void:
 
 
 func _g_coin(col: Color) -> void:
-	draw_circle(Vector2.ZERO, 19.0, col)
-	draw_arc(Vector2.ZERO, 12.5, 0.0, TAU, 32, Color(col.r * 0.6, col.g * 0.5, 0.0, 0.9), 3.0, true)
-	_cap(Vector2(-3, -6), Vector2(-3, 6), 3.0, Color(col.r * 0.6, col.g * 0.5, 0.0, 0.9))
+	var dark := Color(col.r * 0.7, col.g * 0.55, 0.0, col.a)
+	draw_circle(Vector2.ZERO, 19.0, dark)                       # darker rim
+	draw_circle(Vector2.ZERO, 15.5, col)                        # face
+	draw_colored_polygon(PackedVector2Array([                   # little diamond
+		Vector2(0, -8), Vector2(8, 0), Vector2(0, 8), Vector2(-8, 0)]), Color(1.0, 0.97, 0.75, col.a))
+	draw_polyline(PackedVector2Array([Vector2(0, -8), Vector2(8, 0), Vector2(0, 8), Vector2(-8, 0), Vector2(0, -8)]), dark, 2.0, true)
 
 
 func _g_mountain(col: Color) -> void:

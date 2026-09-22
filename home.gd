@@ -5,9 +5,12 @@ extends Control
 ##   - A pill toggle at the top switches between three tabs:
 ##       "Home" (formerly "Marketplace"): list of games (Blocky World first;
 ##                      append more later).
-##       "Shop":        spend the coins you collected (saved between sessions)
-##                      on Swagger Walk, Coin Runner and the Rainbow Aura, and
-##                      switch them on/off.
+##       "Shop":        spend the coins you collected (saved between sessions).
+##                      Two sub-tabs: "Items" (Swagger Walk, Coin Runner,
+##                      Rainbow Aura, Angel Float — each card shows a real 3D
+##                      avatar running with it; switch on/off) and
+##                      "Shirts" (wearable shirt designs, 100 coins each,
+##                      shown on the torso — only one worn at a time).
 ##       "Customize":   recolor head / torso / arms / legs, pick a backdrop,
 ##                      or pick which dance the avatar performs (the
 ##                      "Dances" chip), with a live 3D preview in front.
@@ -31,9 +34,13 @@ const TAB_MARKET := "marketplace" # internal id only — the label shown is "Hom
 const TAB_CUSTOMIZE := "customize"
 const TAB_SHOP := "shop"
 const TAB_KEYS := [TAB_MARKET, TAB_SHOP, TAB_CUSTOMIZE] # left -> right
+const SHOP_SEC_ITEMS := "items"   # Shop sub-tab: walk styles / aura
+const SHOP_SEC_SHIRTS := "shirts" # Shop sub-tab: wearable shirt designs
+const SHOP_SEC_KEYS: Array[String] = [SHOP_SEC_ITEMS, SHOP_SEC_SHIRTS]
 const PART_BG := "background" # 5th chip: backdrop picker instead of colors
 const PART_DANCE := "dances"  # 6th chip: dance picker instead of colors
 const PART_KEYS := ["head", "torso", "arms", "legs", PART_BG, PART_DANCE]
+const SHOP_CARD_STEP := 256.0 # distance between two Shop cards (card height 232 + gap)
 const CHIP_FONT := 22
 const CHIP_GAP := 10.0
 const EDIT_NAME := "name"
@@ -55,6 +62,8 @@ const STR := {
 		"recommended": "Recommended for you", "blocky_world": "Blocky World",
 		"world_desc": "Explore, collect coins, and try the Parkour course",
 		"rating": "Rating: 100%", "more_worlds": "More worlds are coming soon",
+		"studio_title": "Studio", "studio_desc": "Build your own level and publish it for everyone",
+		"community_title": "Community Games", "community_desc": "Play levels other players published",
 		"more_items": "More items are coming soon", "play_with_others": "Play with others",
 		"play_online": "Play online", "play_online_desc": "See other players and chat",
 		"your_name": "Your name", "server": "Server", "edit": "Edit",
@@ -68,8 +77,15 @@ const STR := {
 		"swagger_name": "Swagger Walk", "swagger_desc": "A cool strut with swinging hips",
 		"aura_name": "Rainbow Aura", "aura_desc": "Glowing rings and sparks around you",
 		"coinrun_name": "Coin Runner", "coinrun_desc": "Bouncy, energetic stride with a little hop on every step",
+		"angel_name": "Angel Float", "angel_desc": "Angel wings, hover above the ground and fly when you move",
 		"equipped_fmt": "%s equipped", "turned_off_fmt": "%s turned off",
 		"bought_fmt": "Bought %s!", "not_enough_fmt": "Not enough coins — %s costs %d",
+		"shop_sec_items": "Items", "shop_sec_shirts": "Shirts",
+		"shirt_ironlion_name": "IronLion", "shirt_ironlion_desc": "Royal lion crest with crossed axes",
+		"shirt_algeria_name": "Algeria", "shirt_algeria_desc": "Green and white national football jersey",
+		"shirt_cyberdragon_name": "CyberDragon", "shirt_cyberdragon_desc": "Neon purple cyber-dragon hoodie",
+		"shirt_phoenix_name": "Phoenix", "shirt_phoenix_desc": "Glowing blue phoenix emblem",
+		"shirt_rebel_name": "Rebel", "shirt_rebel_desc": "Graffiti-style hoodie print with a skull",
 	},
 	"ar": {
 		"tab_home": "الرئيسية", "tab_shop": "المتجر", "tab_customize": "تخصيص",
@@ -80,6 +96,8 @@ const STR := {
 		"recommended": "موصى به لك", "blocky_world": "بلوكي وورلد",
 		"world_desc": "استكشف، اجمع العملات، وجرّب مسار الباركور",
 		"rating": "التقييم: 100%", "more_worlds": "عوالم جديدة قريبًا",
+		"studio_title": "استوديو البناء", "studio_desc": "اصنع خريطتك الخاصة وانشرها لكل اللاعبين",
+		"community_title": "ألعاب اللاعبين", "community_desc": "العب خرائط صنعها لاعبون ثانيون",
 		"more_items": "عناصر جديدة قريبًا", "play_with_others": "العب مع الآخرين",
 		"play_online": "اللعب أونلاين", "play_online_desc": "شاهد اللاعبين الآخرين وتحدث معهم",
 		"your_name": "اسمك", "server": "الخادم", "edit": "تعديل",
@@ -93,8 +111,15 @@ const STR := {
 		"swagger_name": "مشية العرض", "swagger_desc": "مشية أنيقة مع تمايل الوركين",
 		"aura_name": "هالة قوس قزح", "aura_desc": "حلقات متوهجة وشرر يحيط بك",
 		"coinrun_name": "عدّاء العملات", "coinrun_desc": "خطوة نشيطة مع قفزة صغيرة في كل خطوة",
+		"angel_name": "مشية الملاك", "angel_desc": "أجنحة ملاك، تطفو فوق الأرض وتطير لما تتحرك",
 		"equipped_fmt": "تم تجهيز %s", "turned_off_fmt": "تم إيقاف %s",
 		"bought_fmt": "تم شراء %s!", "not_enough_fmt": "العملات غير كافية — %s يكلّف %d",
+		"shop_sec_items": "العناصر", "shop_sec_shirts": "القمصان",
+		"shirt_ironlion_name": "الأسد الحديدي", "shirt_ironlion_desc": "شعار أسد ملكي مع فأسين متقاطعين",
+		"shirt_algeria_name": "الجزائر", "shirt_algeria_desc": "قميص المنتخب الوطني بالأخضر والأبيض",
+		"shirt_cyberdragon_name": "التنين السيبراني", "shirt_cyberdragon_desc": "هودي تنين بنفسجي متوهج بطابع سيبراني",
+		"shirt_phoenix_name": "فينيكس", "shirt_phoenix_desc": "شعار طائر العنقاء المتوهج بالأزرق",
+		"shirt_rebel_name": "ريبل", "shirt_rebel_desc": "طباعة هودي بأسلوب الغرافيتي مع جمجمة",
 	},
 }
 
@@ -128,6 +153,7 @@ const CHAR_MID_Y := 1.17 # avatar vertical centre in world units
 const CAM_DIST := 9.0
 
 var tab := TAB_MARKET
+var shop_section := SHOP_SEC_ITEMS
 var selected_part := "torso"
 
 var preview_container: SubViewportContainer
@@ -139,12 +165,24 @@ var _font: Font
 var _font_bold: Font
 var _bg_texs: Array = [] # Texture2D (or null) per Customization.BACKGROUNDS entry
 var _bg_shown := 0
+var _shirt_texs := {} # id -> Texture2D (or null), for Customization.SHIRT_ITEMS thumbnails
 var _bg_prev := -1 # backdrop being faded out, -1 = none
 var _bg_a := 1.0   # fade-in progress of _bg_shown
 var _tab_anim := 0.0 # position of the sliding pill, in tabs (0 = Marketplace, 1 = Shop, 2 = Customize)
 var _tab_w: Array[float] = []
+## One tiny 3D scene per Items card (id -> {"vp": SubViewport, "model": Blocky}),
+## so every walk / the aura is shown on a real 3D avatar running in place.
+var _shop_previews := {}
+var _shop_prev_on := false
+const SHOP_PREVIEW_PX := 256
+
 var _shop_msg := ""
 var _shop_msg_t := 0.0
+var _shop_scroll := 0.0          # how far the Shop list is scrolled (logical px)
+var _shop_press_active := false  # a finger / the mouse is down inside the Shop list
+var _shop_press_id := -1
+var _shop_press_pos := Vector2.ZERO
+var _shop_dragging := false      # the press turned into a scroll drag (so it isn't a tap)
 var _photo := false
 var _hint_t := 0.0
 var _inset_top := 0.0
@@ -206,6 +244,18 @@ func _shop_item_name(id: String) -> String:
 			return _t("aura_name")
 		"coinrun":
 			return _t("coinrun_name")
+		"angel":
+			return _t("angel_name")
+		"shirt_ironlion":
+			return _t("shirt_ironlion_name")
+		"shirt_algeria":
+			return _t("shirt_algeria_name")
+		"shirt_cyberdragon":
+			return _t("shirt_cyberdragon_name")
+		"shirt_phoenix":
+			return _t("shirt_phoenix_name")
+		"shirt_rebel":
+			return _t("shirt_rebel_name")
 	return id
 
 
@@ -217,7 +267,28 @@ func _shop_item_desc(id: String) -> String:
 			return _t("aura_desc")
 		"coinrun":
 			return _t("coinrun_desc")
+		"angel":
+			return _t("angel_desc")
+		"shirt_ironlion":
+			return _t("shirt_ironlion_desc")
+		"shirt_algeria":
+			return _t("shirt_algeria_desc")
+		"shirt_cyberdragon":
+			return _t("shirt_cyberdragon_desc")
+		"shirt_phoenix":
+			return _t("shirt_phoenix_desc")
+		"shirt_rebel":
+			return _t("shirt_rebel_desc")
 	return ""
+
+
+## The item list the Shop is currently showing (Items or Shirts sub-tab).
+func _shop_active_list() -> Array:
+	return Customization.SHIRT_ITEMS if shop_section == SHOP_SEC_SHIRTS else Customization.SHOP_ITEMS
+
+
+func _shop_section_label(i: int) -> String:
+	return _t("shop_sec_shirts") if SHOP_SEC_KEYS[i] == SHOP_SEC_SHIRTS else _t("shop_sec_items")
 
 
 ## Recomputed whenever the language changes (word widths differ), and once
@@ -253,7 +324,15 @@ func _ready() -> void:
 		_bg_texs.append(tex)
 	_bg_shown = Customization.background
 
+	for shirt in Customization.SHIRT_ITEMS:
+		var spath: String = shirt["tex"]
+		var stex: Texture2D = null
+		if ResourceLoader.exists(spath):
+			stex = load(spath) as Texture2D
+		_shirt_texs[String(shirt["id"])] = stex
+
 	_build_preview()
+	_build_shop_previews()
 	_build_editor()
 	_update_insets()
 	_update_preview_layout()
@@ -305,10 +384,80 @@ func _build_preview() -> void:
 	_apply_shop_to_preview()
 
 
+## Builds the little 3D scenes behind the Shop's Items cards (walks + aura).
+func _build_shop_previews() -> void:
+	for it in Customization.SHOP_ITEMS:
+		var id := String(it["id"])
+		var kind := String(it["kind"])
+		if kind != "walk" and kind != "aura":
+			continue
+		var sub := SubViewport.new()
+		sub.size = Vector2i(SHOP_PREVIEW_PX, SHOP_PREVIEW_PX)
+		sub.transparent_bg = true
+		sub.own_world_3d = true
+		sub.render_target_update_mode = SubViewport.UPDATE_DISABLED # only drawn while the Shop is open
+		add_child(sub)
+
+		var root := Node3D.new()
+		sub.add_child(root)
+		var env := WorldEnvironment.new()
+		var e := Environment.new()
+		e.background_mode = Environment.BG_COLOR
+		e.background_color = Color(0, 0, 0, 0)
+		e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+		e.ambient_light_color = Color(0.6, 0.6, 0.68)
+		e.ambient_light_energy = 1.1
+		env.environment = e
+		root.add_child(env)
+		var sun := DirectionalLight3D.new()
+		sun.rotation_degrees = Vector3(-40.0, -30.0, 0.0)
+		sun.light_energy = 1.15
+		root.add_child(sun)
+		var cam := Camera3D.new()
+		cam.fov = 36.0
+		cam.position = Vector3(0.0, 1.05, 5.0)
+		cam.current = true
+		root.add_child(cam)
+
+		var m := BlockyScript.new()
+		root.add_child(m)
+		m.build(Customization.head_color, Customization.torso_color,
+			Customization.arms_color, Customization.arms_color,
+			Customization.legs_color, Customization.legs_color,
+			Customization.hair_color, false)
+		m.set_walk_style(Customization.walk_style_for_id(id))
+		m.set_aura(kind == "aura")
+		m.rotation.y = 0.9 # three-quarter view so the stride is easy to see
+		_shop_previews[id] = {"vp": sub, "model": m}
+
+
+## Renders + animates the Items cards only while they're on screen, and picks
+## up the player's current colors / shirt whenever the Shop is opened.
+func _update_shop_previews(delta: float) -> void:
+	var want := tab == TAB_SHOP and shop_section == SHOP_SEC_ITEMS
+	if want != _shop_prev_on:
+		_shop_prev_on = want
+		if want:
+			for id in _shop_previews:
+				var m = _shop_previews[id]["model"]
+				m.set_part_color("head", Customization.head_color)
+				m.set_part_color("torso", Customization.torso_color)
+				m.set_part_color("arms", Customization.arms_color)
+				m.set_part_color("legs", Customization.legs_color)
+				m.set_shirt(Customization.current_shirt_tex())
+		for id in _shop_previews:
+			var vp: SubViewport = _shop_previews[id]["vp"]
+			vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS if want else SubViewport.UPDATE_DISABLED
+	if want:
+		for id in _shop_previews:
+			_shop_previews[id]["model"].animate(delta, 1.0, true, 0.0) # 1.0 = full run
+
+
 func _process(delta: float) -> void:
 	if _font == null:
 		return # (headless server run: nothing to show)
 	_update_insets()
+	_shop_scroll = clampf(_shop_scroll, 0.0, _shop_scroll_max())
 	var target := float(TAB_KEYS.find(tab))
 	_tab_anim = lerpf(_tab_anim, target, clampf(delta * 14.0, 0.0, 1.0))
 	_shop_msg_t = maxf(_shop_msg_t - delta, 0.0)
@@ -321,6 +470,7 @@ func _process(delta: float) -> void:
 		var yaw_target := 0.0 if preview_blocky.is_dancing() else sin(preview_yaw * 0.6) * 0.5
 		preview_blocky.rotation.y = lerp_angle(preview_blocky.rotation.y, yaw_target, clampf(delta * 8.0, 0.0, 1.0))
 		preview_blocky.animate(delta, 0.0, true)
+	_update_shop_previews(delta)
 	_update_preview_layout()
 	queue_redraw()
 
@@ -478,6 +628,7 @@ func _swatch_rect(i: int) -> Rect2:
 	var grid_w := cell * 6.0 + SWATCH_GAP * 5.0
 	var x0 := s.position.x + s.size.x * 0.5 - grid_w * 0.5
 	var col := i % 6
+	@warning_ignore("integer_division")
 	var row := i / 6
 	return Rect2(x0 + col * (cell + SWATCH_GAP), top + row * (cell + SWATCH_GAP), cell, cell)
 
@@ -492,8 +643,14 @@ func _more_card_rect() -> Rect2:
 	return Rect2(card.position.x, card.end.y + 20.0, card.size.x, 92.0)
 
 
+## "Community Games" card, right under the Studio card above.
+func _community_card_rect() -> Rect2:
+	var m := _more_card_rect()
+	return Rect2(m.position.x, m.end.y + 14.0, m.size.x, 92.0)
+
+
 func _online_card_rect() -> Rect2:
-	var more := _more_card_rect()
+	var more := _community_card_rect()
 	return Rect2(more.position.x, more.end.y + 70.0, more.size.x, 326.0)
 
 
@@ -702,10 +859,33 @@ func _shop_balance_rect() -> Rect2:
 	return Rect2(c.position.x + 24.0, _header_bottom() + 30.0, c.size.x - 48.0, 96.0)
 
 
+## Two-way "Items / Shirts" segmented control, sitting under the balance card.
+func _shop_section_rect(i: int) -> Rect2:
+	var bal := _shop_balance_rect()
+	var top := bal.end.y + 22.0
+	var w := (bal.size.x - 10.0) * 0.5
+	return Rect2(bal.position.x + float(i) * (w + 10.0), top, w, 64.0)
+
+
 func _shop_card_rect(i: int) -> Rect2:
 	var c := _col()
-	var top := _shop_balance_rect().end.y + 52.0
-	return Rect2(c.position.x + 24.0, top + i * 256.0, c.size.x - 48.0, 232.0)
+	var top := _shop_section_rect(0).end.y + 60.0 - _shop_scroll
+	return Rect2(c.position.x + 24.0, top + float(i) * SHOP_CARD_STEP, c.size.x - 48.0, 232.0)
+
+
+## The part of the screen the Shop list is visible in: under the Items/Shirts
+## switch and above the Play bar. Cards outside it are scrolled out of view.
+func _shop_list_rect() -> Rect2:
+	var top := _shop_section_rect(0).end.y + 48.0
+	var bottom := _play_rect().position.y - 14.0
+	return Rect2(0.0, top, size.x, maxf(bottom - top, 100.0))
+
+
+## How far the list can scroll: its full height (cards + the "more items"
+## strip) minus the height that fits on screen.
+func _shop_scroll_max() -> float:
+	var content := 12.0 + float(_shop_active_list().size()) * SHOP_CARD_STEP + 92.0 + 16.0
+	return maxf(content - _shop_list_rect().size.y, 0.0)
 
 
 func _shop_button_rect(i: int) -> Rect2:
@@ -714,35 +894,32 @@ func _shop_button_rect(i: int) -> Rect2:
 
 
 func _coin_icon(center: Vector2, radius: float) -> void:
-	draw_circle(center, radius, Color(1.0, 0.8, 0.1))
-	draw_arc(center, radius * 0.66, 0.0, TAU, 24, Color(0.85, 0.6, 0.0), maxf(radius * 0.14, 2.0))
+	draw_circle(center, radius, Color(0.9, 0.55, 0.05))            # darker rim
+	draw_circle(center, radius * 0.8, Color(1.0, 0.85, 0.2))       # bright face
+	var d := radius * 0.42                                           # little diamond in the middle
+	var pts := PackedVector2Array([center + Vector2(0.0, -d), center + Vector2(d, 0.0), center + Vector2(0.0, d), center + Vector2(-d, 0.0)])
+	draw_colored_polygon(pts, Color(1.0, 0.97, 0.7))
+	draw_polyline(PackedVector2Array([pts[0], pts[1], pts[2], pts[3], pts[0]]), Color(0.85, 0.55, 0.05), maxf(radius * 0.07, 1.5), true)
 
 
 func _draw_shop() -> void:
-	# balance
 	var bal := _shop_balance_rect()
-	_card(bal, Color.WHITE, 40.0, 30, Color(0, 0, 0, 0.07))
-	_coin_icon(Vector2(bal.position.x + 66.0, bal.get_center().y), 30.0)
-	_text(_font_bold, Vector2(bal.position.x + 116.0, bal.get_center().y + 17.0), str(Customization.coins), 48, C_INK)
-	var hint := _t("coins_hint")
-	var hw := _font.get_string_size(hint, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 20).x
-	_text(_font, Vector2(bal.end.x - 30.0 - hw, bal.get_center().y + 7.0), hint, 20, C_INK_2)
+	var view := _shop_list_rect()
+	var list := _shop_active_list()
 
-	# heading, or the result of the last tap for a moment
-	var head_pos := Vector2(bal.position.x + 8.0, bal.end.y + 34.0)
-	if _shop_msg_t > 0.0:
-		_text(_font_bold, head_pos, _shop_msg, 28, Color(0.1, 0.5, 0.25))
-	else:
-		_text(_font_bold, head_pos, _t("items"), 28, C_INK)
-
-	for i in Customization.SHOP_ITEMS.size():
-		var it: Dictionary = Customization.SHOP_ITEMS[i]
+	# The list scrolls, so it is drawn first. The fixed parts (balance card,
+	# Items/Shirts switch, heading) and the strip above the Play bar are then
+	# painted over its edges, so nothing ever shows through or under them.
+	for i in list.size():
+		var it: Dictionary = list[i]
 		var id := String(it["id"])
 		var r := _shop_card_rect(i)
+		if r.end.y < view.position.y or r.position.y > view.end.y:
+			continue
 		_card(r, Color.WHITE, 40.0, 30, Color(0, 0, 0, 0.07))
 		var thumb := Rect2(r.position + Vector2(20.0, 20.0), Vector2(200.0, r.size.y - 40.0))
 		_box(thumb, C_TILE, 30.0)
-		_draw_shop_icon(String(it["kind"]), thumb)
+		_draw_shop_icon(String(it["kind"]), thumb, id)
 
 		var tx := thumb.end.x + 24.0
 		_text(_font_bold, Vector2(tx, r.position.y + 66.0), _shop_item_name(id), 34, C_INK)
@@ -752,42 +929,74 @@ func _draw_shop() -> void:
 		var b := _shop_button_rect(i)
 		var price := int(it["price"])
 		if Customization.owns(id):
-			var on := Customization.is_equipped(id)
-			_box(b, C_INK if on else C_SOFT)
-			_text_center(_font_bold, b.get_center(), _t("equipped") if on else _t("equip"), 28, Color.WHITE if on else C_INK)
+			var on2 := Customization.is_equipped(id)
+			_box(b, C_INK if on2 else C_SOFT)
+			_text_center(_font_bold, b.get_center(), _t("equipped") if on2 else _t("equip"), 28, Color.WHITE if on2 else C_INK)
 		else:
 			var can := Customization.coins >= price
 			_box(b, C_GREEN if can else Color("#c9cbd1"))
 			_text_center(_font_bold, Vector2(b.get_center().x - 22.0, b.get_center().y), _t("buy_fmt") % price, 30, Color.WHITE)
 			_coin_icon(Vector2(b.end.x - 42.0, b.get_center().y), 17.0)
 
-	var more := Rect2(_shop_card_rect(0).position.x, _shop_card_rect(Customization.SHOP_ITEMS.size()).position.y, _shop_card_rect(0).size.x, 92.0)
-	_box(more, Color("#e9eaee"), 32.0)
-	_text(_font, Vector2(more.position.x + 32.0, more.get_center().y + 8.0), _t("more_items"), 22, C_INK_2)
+	var more := Rect2(_shop_card_rect(0).position.x, _shop_card_rect(list.size()).position.y, _shop_card_rect(0).size.x, 92.0)
+	if more.end.y >= view.position.y and more.position.y <= view.end.y:
+		_box(more, Color("#e9eaee"), 32.0)
+		_text(_font, Vector2(more.position.x + 32.0, more.get_center().y + 8.0), _t("more_items"), 22, C_INK_2)
 
+	draw_rect(Rect2(0.0, 0.0, size.x, view.position.y), C_BG, true)
+	draw_rect(Rect2(0.0, view.end.y, size.x, size.y - view.end.y), C_BG, true)
 
-## Animated picture for a shop card (the thumbnail tile).
-func _draw_shop_icon(kind: String, tile: Rect2) -> void:
-	var k := tile.size.y * 0.34
-	var o := Vector2(tile.get_center().x, tile.end.y - tile.size.y * 0.08)
-	var now := float(Time.get_ticks_msec()) / 1000.0
-	if kind == "aura":
-		var col := Color.from_hsv(fposmod(now * 0.15, 1.0), 0.6, 1.0)
-		for j in 3:
-			var t := fposmod(now * 0.6 + float(j) / 3.0, 1.0)
-			var y := o.y - (0.1 + t * 2.3) * k
-			draw_set_transform(Vector2(o.x, y), 0.0, Vector2(1.0, 0.28))
-			draw_arc(Vector2.ZERO, k * 0.95 * (1.0 - 0.3 * t), 0.0, TAU, 32, Color(col, sin(t * PI) * 0.9), 6.0, true)
-			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-		_draw_mini_avatar(o, k, 0.12, -0.12, 0.0, 0.0)
+	# balance
+	_card(bal, Color.WHITE, 40.0, 30, Color(0, 0, 0, 0.07))
+	_coin_icon(Vector2(bal.position.x + 66.0, bal.get_center().y), 30.0)
+	_text(_font_bold, Vector2(bal.position.x + 116.0, bal.get_center().y + 17.0), str(Customization.coins), 48, C_INK)
+	var hint := _t("coins_hint")
+	var hw := _font.get_string_size(hint, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 20).x
+	_text(_font, Vector2(bal.end.x - 30.0 - hw, bal.get_center().y + 7.0), hint, 20, C_INK_2)
+
+	# "Items" / "Shirts" segmented control
+	for i in SHOP_SEC_KEYS.size():
+		var sr := _shop_section_rect(i)
+		var on: bool = SHOP_SEC_KEYS[i] == shop_section
+		_box(sr, C_INK if on else C_SOFT, 20.0)
+		_text_center(_font_bold, sr.get_center(), _shop_section_label(i), 26, Color.WHITE if on else C_INK_2)
+
+	# heading (the current section's name), or the result of the last tap for a moment
+	var head_pos := Vector2(bal.position.x + 8.0, _shop_section_rect(0).end.y + 34.0)
+	if _shop_msg_t > 0.0:
+		_text(_font_bold, head_pos, _shop_msg, 28, Color(0.1, 0.5, 0.25))
 	else:
-		# mid-stride: arms and legs swinging opposite ways, swaying a little
-		var sway := sin(now * 5.0) * 0.12
-		_draw_mini_avatar(o, k, 0.7 + sway, -0.7 + sway, -0.5, 0.5)
+		_text(_font_bold, head_pos, _shop_section_label(SHOP_SEC_KEYS.find(shop_section)), 28, C_INK)
+
+	# thin scrollbar on the right edge when the list is longer than the screen
+	var max_scroll := _shop_scroll_max()
+	if max_scroll > 0.0:
+		var track := Rect2(size.x - 14.0, view.position.y + 6.0, 6.0, view.size.y - 12.0)
+		_box(track, Color(0, 0, 0, 0.06))
+		var thumb_h := maxf(track.size.y * view.size.y / (view.size.y + max_scroll), 40.0)
+		var thumb_y := track.position.y + (track.size.y - thumb_h) * (_shop_scroll / max_scroll)
+		_box(Rect2(track.position.x, thumb_y, track.size.x, thumb_h), Color(0, 0, 0, 0.25))
+
+
+## Picture for a shop card (the thumbnail tile). Walk / aura items show a real
+## 3D avatar running in place with that item on (see _build_shop_previews);
+## shirts show their real design image.
+func _draw_shop_icon(kind: String, tile: Rect2, id: String = "") -> void:
+	if kind == "shirt":
+		var tex: Texture2D = _shirt_texs.get(id)
+		if tex:
+			_draw_cover_rounded(tex, tile, 30.0, 0.15)
+		return
+	if not _shop_previews.has(id):
+		return
+	var vp: SubViewport = _shop_previews[id]["vp"]
+	var s := tile.size.y
+	draw_texture_rect(vp.get_texture(), Rect2(tile.get_center() - Vector2(s, s) * 0.5, Vector2(s, s)), false)
 
 
 func _shop_tap(i: int) -> void:
-	var it: Dictionary = Customization.SHOP_ITEMS[i]
+	var list := _shop_active_list()
+	var it: Dictionary = list[i]
 	var id := String(it["id"])
 	var nm := _shop_item_name(id)
 	if Customization.owns(id):
@@ -806,6 +1015,7 @@ func _apply_shop_to_preview() -> void:
 	if preview_blocky:
 		preview_blocky.set_walk_style(Customization.walk_style())
 		preview_blocky.set_aura(Customization.aura_enabled())
+		preview_blocky.set_shirt(Customization.current_shirt_tex())
 
 
 ## Dimmed overlay with the text box for the name / username / sign-up field.
@@ -921,6 +1131,7 @@ func _begin_edit(field: String) -> void:
 	_edit.caret_column = _edit.text.length()
 
 
+@warning_ignore("shadowed_variable")
 func _on_edit_submitted(_text: String) -> void:
 	_finish_edit(true)
 
@@ -969,10 +1180,23 @@ func _draw_marketplace() -> void:
 	_box(chip, Color(0.87, 0.96, 0.90))
 	_text_center(_font, chip.get_center(), rating, 20, Color(0.1, 0.5, 0.25))
 
-	var more := _more_card_rect()
-	_box(more, Color("#e9eaee"), 32.0)
-	_text(_font, Vector2(more.position.x + 32.0, more.get_center().y + 8.0), _t("more_worlds"), 22, C_INK_2)
+	_draw_game_row(_more_card_rect(), "🛠️", _t("studio_title"), _t("studio_desc"))
+	_draw_game_row(_community_card_rect(), "🌍", _t("community_title"), _t("community_desc"))
 	_draw_online_card()
+
+
+## One clickable row for Studio / Community Games: an emoji tile, title +
+## one-line description, and a small chevron (it always navigates away, so
+## there's no on/off state to show like the Shop's equip buttons have).
+func _draw_game_row(r: Rect2, emoji: String, title: String, desc: String) -> void:
+	_card(r, Color.WHITE, 28.0, 20, Color(0, 0, 0, 0.06))
+	var tile := Rect2(r.position + Vector2(14.0, 14.0), Vector2(r.size.y - 28.0, r.size.y - 28.0))
+	_box(tile, C_TILE, 18.0)
+	_text_center(_font_bold, tile.get_center(), emoji, 30, C_INK)
+	var tx := tile.end.x + 20.0
+	_text(_font_bold, Vector2(tx, r.position.y + 36.0), title, 26, C_INK)
+	_text(_font, Vector2(tx, r.position.y + 64.0), desc, 18, C_INK_2)
+	_text_center(_font_bold, Vector2(r.end.x - 26.0, r.get_center().y), "›", 30, C_INK_2)
 
 
 func _draw_online_card() -> void:
@@ -1175,14 +1399,57 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
 		var t := event as InputEventScreenTouch
 		if t.pressed:
-			_press(t.position)
+			_press(t.position, t.index)
+		else:
+			_shop_release(t.index, t.position)
+	elif event is InputEventScreenDrag:
+		var d := event as InputEventScreenDrag
+		_shop_move(d.index, d.position, d.relative)
 	elif _mouse_mode and event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
-		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
-			_press(mb.position)
+		if mb.button_index == MOUSE_BUTTON_LEFT:
+			if mb.pressed:
+				_press(mb.position, 99)
+			else:
+				_shop_release(99, mb.position)
+		elif mb.pressed and tab == TAB_SHOP and _edit_field == "" and Customization.registered:
+			if mb.button_index == MOUSE_BUTTON_WHEEL_UP:
+				_shop_scroll = clampf(_shop_scroll - 90.0, 0.0, _shop_scroll_max())
+			elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+				_shop_scroll = clampf(_shop_scroll + 90.0, 0.0, _shop_scroll_max())
+	elif _mouse_mode and event is InputEventMouseMotion:
+		var mm := event as InputEventMouseMotion
+		if (mm.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
+			_shop_move(99, mm.position, mm.relative)
 
 
-func _press(pos: Vector2) -> void:
+## Dragging inside the Shop list scrolls it. A press only becomes a "tap on a
+## card" if it is released without having turned into a drag (see _shop_release).
+func _shop_move(id: int, pos: Vector2, rel: Vector2) -> void:
+	if not _shop_press_active or id != _shop_press_id:
+		return
+	if not _shop_dragging and pos.distance_to(_shop_press_pos) > 16.0:
+		_shop_dragging = true
+	if _shop_dragging:
+		_shop_scroll = clampf(_shop_scroll - rel.y, 0.0, _shop_scroll_max())
+
+
+func _shop_release(id: int, pos: Vector2) -> void:
+	if not _shop_press_active or id != _shop_press_id:
+		return
+	_shop_press_active = false
+	var was_drag := _shop_dragging
+	_shop_dragging = false
+	if was_drag or tab != TAB_SHOP or not _shop_list_rect().has_point(pos):
+		return
+	var list := _shop_active_list()
+	for i in list.size():
+		if _shop_card_rect(i).has_point(pos):
+			_shop_tap(i)
+			return
+
+
+func _press(pos: Vector2, id: int = 99) -> void:
 	if _lang_btn_rect().has_point(pos): # works everywhere, even mid sign-up
 		Customization.set_lang("ar" if Customization.lang == "en" else "en")
 		_recompute_label_widths()
@@ -1211,10 +1478,12 @@ func _press(pos: Vector2) -> void:
 
 	var rects := _tab_rects()
 	for i in TAB_KEYS.size():
+		@warning_ignore("shadowed_variable_base_class")
 		var tr: Rect2 = rects[i + 1]
 		var hit := Rect2(tr.position.x, tr.position.y - 14.0, tr.size.x, tr.size.y + 28.0)
 		if hit.has_point(pos):
 			tab = TAB_KEYS[i]
+			_shop_scroll = 0.0
 			return
 
 	if _play_rect().has_point(pos):
@@ -1224,6 +1493,14 @@ func _press(pos: Vector2) -> void:
 	if tab == TAB_MARKET:
 		if _market_card_rect().has_point(pos):
 			_start_game()
+			return
+		if _more_card_rect().has_point(pos):
+			Studio.open_mode = ""
+			get_tree().change_scene_to_file("res://studio.tscn")
+			return
+		if _community_card_rect().has_point(pos):
+			Studio.open_mode = "browse"
+			get_tree().change_scene_to_file("res://studio.tscn")
 			return
 		if _online_row_rect(0).has_point(pos):
 			Customization.set_online(not Customization.online)
@@ -1235,10 +1512,18 @@ func _press(pos: Vector2) -> void:
 			_begin_edit(EDIT_USERNAME)
 			return
 	elif tab == TAB_SHOP:
-		for i in Customization.SHOP_ITEMS.size():
-			if _shop_card_rect(i).has_point(pos):
-				_shop_tap(i)
+		for i in SHOP_SEC_KEYS.size():
+			if _shop_section_rect(i).has_point(pos):
+				shop_section = SHOP_SEC_KEYS[i]
+				_shop_scroll = 0.0
 				return
+		# A tap on a card is decided when the finger lifts, so that dragging
+		# the list up and down can scroll it without buying anything.
+		if _shop_list_rect().has_point(pos):
+			_shop_press_active = true
+			_shop_press_id = id
+			_shop_press_pos = pos
+			_shop_dragging = false
 	else:
 		for i in PART_KEYS.size():
 			if _chip_rect(i).has_point(pos):

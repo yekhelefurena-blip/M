@@ -22,6 +22,11 @@ var bounds_center := Vector2(0.0, 0.0)
 var bounds_limit := 94.0
 var respawn_pos := Vector3(0.0, 1.0, 34.0)
 var fall_y := -20.0
+## Per-level tuning (Studio "Level settings" + speed/bounce pads). 1.0 = the
+## normal feel everywhere else in the game; main.gd is the only thing that
+## ever changes these, and only while a community level is running.
+var speed_mult := 1.0
+var jump_mult := 1.0
 
 var input_dir := Vector3.ZERO
 var want_jump := false
@@ -63,6 +68,7 @@ func _ready() -> void:
 	# items bought in the Shop
 	model.set_walk_style(Customization.walk_style())
 	model.set_aura(Customization.aura_enabled())
+	model.set_shirt(Customization.current_shirt_tex())
 
 	_run_dust = _make_dust(14, 0.45, false)
 	_puff_dust = _make_dust(12, 0.5, true)
@@ -114,7 +120,7 @@ func _physics_process(delta: float) -> void:
 	if model.is_dancing() and (input_dir.length() > 0.1 or want_jump):
 		model.stop_dance()
 
-	var speed := SPEED * (0.55 if in_water else 1.0)
+	var speed := SPEED * speed_mult * (0.55 if in_water else 1.0)
 	var target := input_dir * speed
 	var on_floor := is_on_floor()
 	var accel := GROUND_ACCEL if on_floor else AIR_ACCEL
@@ -131,7 +137,7 @@ func _physics_process(delta: float) -> void:
 		_coyote -= delta
 
 	if _jump_buffer > 0.0 and _coyote > 0.0:
-		velocity.y = JUMP_VELOCITY
+		velocity.y = JUMP_VELOCITY * jump_mult
 		_jump_buffer = 0.0
 		_coyote = 0.0
 		_puff()
@@ -165,5 +171,5 @@ func _physics_process(delta: float) -> void:
 		model.rotation.y = lerp_angle(model.rotation.y, target_yaw, 14.0 * delta)
 
 	var hv := Vector2(velocity.x, velocity.z)
-	_run_dust.emitting = now_floor and hv.length() > SPEED * 0.6 and not in_water
+	_run_dust.emitting = now_floor and hv.length() > SPEED * 0.6 and not in_water and model.walk_style != 3
 	model.animate(delta, hv.length() / SPEED, now_floor, velocity.y)

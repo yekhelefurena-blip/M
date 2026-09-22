@@ -146,6 +146,7 @@ func _add_remote(id: int, info: Dictionary) -> void:
 
 	model.set_walk_style(int(info.get("walk", 0)))
 	model.set_aura(bool(info.get("aura", false)))
+	model.set_shirt(Customization.shirt_tex_for_id(String(info.get("shirt", ""))))
 
 	var tag := _make_label(String(info.get("name", "Player")), Color(1, 1, 1))
 	tag.position = Vector3(0.0, TAG_Y, 0.0)

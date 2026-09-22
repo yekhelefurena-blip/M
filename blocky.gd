@@ -36,7 +36,10 @@ const P_HEAD_Z := 13  # tilt
 const P_BOB := 14     # whole-body height offset
 const P_SQUASH := 15  # + stretch / - squash
 const P_SWAY := 16    # whole-body sideways shift (hips)
-const P_COUNT := 17
+const P_PITCH := 17   # whole-body pitch around the hips (+ = tilt forward, used for flying)
+const P_WING_Y := 18  # wings swept back (+) / forward (-)
+const P_WING_Z := 19  # wings opened outward
+const P_COUNT := 20
 
 ## Robot dance: one snapped pose per step.
 ## [arm A x, arm A z, arm B x, arm B z, leg A x, leg B x, twist, head yaw, head pitch]
@@ -50,6 +53,11 @@ const ROBOT_POSES := [
 	[0.0, 0.9, 0.0, -0.9, 0.0, 0.0, 0.0, 0.0, 0.3],
 	[0.0, 2.6, 0.0, -2.6, 0.0, 0.0, 0.0, 0.0, -0.3],
 ]
+
+## The 3D angel wings worn with Angel Float (converted from Angel_Wings.usdz).
+## The file holds two nodes, "WingA" (+X side) and "WingB" (-X side), each with
+## its vertices measured from the wing's own root so it can rotate at the shoulder.
+const WING_MODEL := "res://assets/angel_wings.glb"
 
 var rig: Node3D
 var upper: Node3D
@@ -70,8 +78,12 @@ var leg_b_mesh: MeshInstance3D
 ## "" = not dancing, otherwise "disco" / "floss" / "robot".
 var dance_id := ""
 
-## 0 = normal walk, 1 = Swagger Walk, 2 = Coin Runner (both bought in the Shop).
+## 0 = normal walk, 1 = Swagger Walk, 2 = Coin Runner, 3 = Angel Float (bought in the Shop).
 var walk_style := 0
+
+var _wing_a: Node3D # wing on the +X side, only exists while Angel Float is on
+var _wing_b: Node3D # wing on the -X side
+var _wings_missing := false # the model file couldn't be loaded (not imported yet)
 
 var _aura: Node3D
 var _aura_t := 0.0
@@ -83,6 +95,18 @@ var _aura_light: OmniLight3D
 
 var _eye_a: MeshInstance3D
 var _eye_b: MeshInstance3D
+
+## The torso's own recolorable color, kept separately from the material so a
+## worn shirt (a texture) can override it and set_shirt("") can restore it.
+var _torso_color := Color.WHITE
+var _shirt_tex: Texture2D = null
+var _badge: MeshInstance3D          # small white chest badge (hidden while a shirt is worn)
+var _shirt_mat: StandardMaterial3D  # shared by the front and back shirt panels
+var _shirt_front: MeshInstance3D
+var _shirt_back: MeshInstance3D
+
+## Average color of each shirt image, so the sides of the torso match the shirt.
+static var _shirt_color_cache := {}
 
 var _pose := PackedFloat32Array()
 var _tg := PackedFloat32Array()
@@ -144,8 +168,9 @@ func build(head_c: Color, torso_c: Color, arm_a_c: Color, arm_b_c: Color, leg_a_
 	rig.add_child(upper)
 
 	# torso + small white badge
+	_torso_color = torso_c
 	torso_mesh = _box(upper, Vector3(0.8, 0.8, 0.42), Vector3(0.0, 0.4, 0.0), torso_c)
-	_box(torso_mesh, Vector3(0.36, 0.09, 0.02), Vector3(0.0, 0.22, 0.22), Color(1, 1, 1), true)
+	_badge = _box(torso_mesh, Vector3(0.36, 0.09, 0.02), Vector3(0.0, 0.22, 0.22), Color(1, 1, 1), true)
 
 	# neck pivot + head + face
 	head_pivot = Node3D.new()
@@ -181,6 +206,9 @@ func build(head_c: Color, torso_c: Color, arm_a_c: Color, arm_b_c: Color, leg_a_
 	leg_b = ld[0]
 	leg_b_mesh = ld[1]
 
+	if walk_style == 3:
+		_set_wings(true)
+
 	if sword:
 		_box(arm_a, Vector3(0.06, 0.06, 0.9), Vector3(0.0, -0.75, 0.5), Color(0.8, 0.85, 0.92))
 		_box(arm_a, Vector3(0.3, 0.06, 0.06), Vector3(0.0, -0.75, 0.1), Color(0.45, 0.28, 0.12))
@@ -194,7 +222,11 @@ func set_part_color(part: String, color: Color) -> void:
 			if head_mesh:
 				head_mesh.material_override.albedo_color = color
 		"torso":
-			if torso_mesh:
+			_torso_color = color
+			# While a shirt texture is worn, the torso stays white underneath
+			# it (see set_shirt) so the design's own colors show true; the
+			# chosen color takes effect again once the shirt comes off.
+			if torso_mesh and _shirt_tex == null:
 				torso_mesh.material_override.albedo_color = color
 		"arms":
 			if arm_a_mesh:
@@ -206,6 +238,89 @@ func set_part_color(part: String, color: Color) -> void:
 				leg_a_mesh.material_override.albedo_color = color
 			if leg_b_mesh:
 				leg_b_mesh.material_override.albedo_color = color
+
+
+## Puts on (or takes off) a shirt bought in the Shop. path is the shirt's
+## "tex" from Customization.SHIRT_ITEMS, or "" to go back to the plain
+## recolorable torso.
+##
+## A BoxMesh's UVs are an atlas (each face only gets a third of the image
+## width and half of its height), so painting the shirt image straight onto the
+## torso box shows just a cropped corner of it. Instead the whole design goes on
+## two flat panels (front and back), and the rest of the torso is tinted with the
+## shirt's average color. The chest badge is hidden so it doesn't cover the print.
+func set_shirt(path: String) -> void:
+	if not torso_mesh:
+		return
+	var mat: StandardMaterial3D = torso_mesh.material_override
+	mat.albedo_texture = null
+	var tex: Texture2D = null
+	if path != "":
+		tex = load(path) as Texture2D
+	_shirt_tex = tex
+	if tex == null:
+		mat.albedo_color = _torso_color
+		if _shirt_front:
+			_shirt_front.visible = false
+			_shirt_back.visible = false
+		if _badge:
+			_badge.visible = true
+		return
+	if _shirt_front == null:
+		_build_shirt_panels()
+	_shirt_mat.albedo_texture = tex
+	_shirt_front.visible = true
+	_shirt_back.visible = true
+	if _badge:
+		_badge.visible = false
+	mat.albedo_color = _shirt_side_color(tex)
+
+
+func _build_shirt_panels() -> void:
+	_shirt_mat = StandardMaterial3D.new()
+	_shirt_mat.roughness = 0.9
+	_shirt_mat.texture_repeat = false
+	for i in 2:
+		var quad := QuadMesh.new()
+		quad.size = Vector2(0.8, 0.8)
+		var mi := MeshInstance3D.new()
+		mi.mesh = quad
+		mi.material_override = _shirt_mat
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		if i == 0:
+			mi.position = Vector3(0.0, 0.0, 0.219)
+			_shirt_front = mi
+		else:
+			mi.position = Vector3(0.0, 0.0, -0.219)
+			mi.rotation.y = PI
+			_shirt_back = mi
+		torso_mesh.add_child(mi)
+
+
+## Rough average color of a shirt image (sampled on a small grid).
+func _shirt_side_color(tex: Texture2D) -> Color:
+	var key := tex.resource_path
+	if _shirt_color_cache.has(key):
+		return _shirt_color_cache[key]
+	var col := Color(0.85, 0.85, 0.85)
+	var img := tex.get_image()
+	if img != null and not img.is_empty() and not img.is_compressed():
+		var w := img.get_width()
+		var h := img.get_height()
+		var sum_r := 0.0
+		var sum_g := 0.0
+		var sum_b := 0.0
+		var n := 0
+		for yi in 8:
+			for xi in 8:
+				var px := img.get_pixel(int((xi + 0.5) / 8.0 * w), int((yi + 0.5) / 8.0 * h))
+				sum_r += px.r
+				sum_g += px.g
+				sum_b += px.b
+				n += 1
+		col = Color(sum_r / n, sum_g / n, sum_b / n)
+	_shirt_color_cache[key] = col
+	return col
 
 
 func wave() -> void:
@@ -230,6 +345,7 @@ func is_dancing() -> bool:
 
 func set_walk_style(style: int) -> void:
 	walk_style = style
+	_set_wings(style == 3)
 
 
 ## Turns the Rainbow Aura (rising glow rings + sparks + a soft light) on/off.
@@ -276,6 +392,8 @@ func animate(delta: float, speed_ratio: float, on_floor: bool, vel_y: float = 0.
 			rate = _pose_dance(delta)
 		else:
 			_pose_ground(speed_ratio, delta)
+			if walk_style == 3:
+				rate = 9.0 # slower, floaty transitions between hovering and flying
 		_land = maxf(_land - delta * 4.5, 0.0)
 		if _land > 0.0:
 			_pose_landing()
@@ -286,6 +404,11 @@ func animate(delta: float, speed_ratio: float, on_floor: bool, vel_y: float = 0.
 		_tg[P_ARM_B_X] = 0.0
 		_tg[P_ARM_B_Z] = -2.5 + sin(_t * 14.0) * 0.4
 		_tg[P_HEAD_Z] += 0.1
+
+	# Angel wings stay half open while dancing
+	if walk_style == 3 and dance_id != "":
+		_tg[P_WING_Z] = 0.2 + sin(_t * 3.0) * 0.1
+		_tg[P_WING_Y] = 0.0
 
 	# blink now and then
 	_blink_in -= delta
@@ -316,7 +439,14 @@ func _apply_pose() -> void:
 	leg_b.rotation = Vector3(_pose[P_LEG_B_X], 0.0, _pose[P_LEG_B_Z])
 	upper.rotation = Vector3(_pose[P_LEAN], _pose[P_TWIST], _pose[P_ROLL])
 	head_pivot.rotation = Vector3(_pose[P_HEAD_X], _pose[P_HEAD_Y], _pose[P_HEAD_Z])
-	rig.position = Vector3(_pose[P_SWAY], _pose[P_BOB], 0.0)
+	# pitch the whole body around the hips (Angel Float flight); with pitch 0
+	# this is exactly the old position / no rotation
+	var pitch := _pose[P_PITCH]
+	rig.rotation = Vector3(pitch, 0.0, 0.0)
+	rig.position = Vector3(_pose[P_SWAY], _pose[P_BOB] + 0.8 * (1.0 - cos(pitch)), -0.8 * sin(pitch))
+	if _wing_a:
+		_wing_a.rotation = Vector3(0.0, _pose[P_WING_Y], _pose[P_WING_Z])
+		_wing_b.rotation = Vector3(0.0, -_pose[P_WING_Y], -_pose[P_WING_Z])
 	var sq := _pose[P_SQUASH]
 	rig.scale = Vector3(1.0 - sq * 0.6, 1.0 + sq, 1.0 - sq * 0.6)
 
@@ -365,6 +495,8 @@ func _pose_ground(speed_ratio: float, delta: float) -> void:
 		_walk_swagger(s, c, moving, run)
 	elif walk_style == 2:
 		_walk_coin_runner(s, c, moving, run)
+	elif walk_style == 3:
+		_walk_angel(moving, run)
 
 	# idle: breathing, tiny arm sway, weight shift, slow look-around
 	var breath := sin(_t * 2.2)
@@ -412,6 +544,53 @@ func _walk_coin_runner(s: float, c: float, moving: float, run: float) -> void:
 	_tg[P_HEAD_X] += absf(s) * 0.05 * moving
 
 
+## Angel Float — matches the Roblox "Angel (Floating)" animation:
+##  - standing still: hovering above the ground, one knee raised, arms hanging
+##    a little out to the sides, angel wings opened wide behind you
+##  - moving: the whole body tilts almost flat and flies forward, legs trailing,
+##    head up looking ahead, wings spread and beating slowly
+## `moving` (0..1) blends the two. Replaces the normal walk/run targets (the idle
+## breathing is still added on top).
+func _walk_angel(moving: float, run: float) -> void:
+	var fly := moving
+	var flap := sin(_t * 5.0)    # wing beat while flying
+	var breeze := sin(_t * 1.8)  # slow wing movement while hovering
+	var drift := sin(_t * 2.4)   # float up and down
+
+	# hover above the ground, a bit higher when flying
+	_tg[P_BOB] = 0.32 + 0.22 * fly + drift * 0.05
+
+	# body tilts almost flat while flying (pivots around the hips)
+	_tg[P_PITCH] = (1.12 + 0.12 * run) * fly
+	_tg[P_LEAN] = 0.0
+	_tg[P_SWAY] = 0.0
+	_tg[P_ROLL] = drift * 0.03 * (1.0 - fly)
+	# bank into turns (twist = roll around the body's long axis when flying)
+	_tg[P_TWIST] = clampf(_yaw_rate * 0.03, -0.5, 0.5) * fly
+
+	# legs: hovering = one knee raised, flying = both trail behind the body
+	_tg[P_LEG_A_X] = lerpf(-0.55 + drift * 0.05, 0.10 + drift * 0.10, fly)
+	_tg[P_LEG_B_X] = lerpf(0.12 - drift * 0.05, 0.22 - drift * 0.10, fly)
+	_tg[P_LEG_A_Z] = 0.04
+	_tg[P_LEG_B_Z] = -0.04
+
+	# arms: hanging slightly out when hovering, opened wider when flying
+	_tg[P_ARM_A_X] = lerpf(-0.10, 0.0, fly)
+	_tg[P_ARM_B_X] = lerpf(-0.10, 0.0, fly)
+	_tg[P_ARM_A_Z] = lerpf(0.42, 0.65, fly) + flap * 0.08 * fly
+	_tg[P_ARM_B_Z] = -(lerpf(0.42, 0.65, fly) + flap * 0.08 * fly)
+
+	# head keeps looking straight ahead
+	_tg[P_HEAD_X] = -(_tg[P_PITCH] + _tg[P_LEAN]) * 0.85
+	_tg[P_HEAD_Y] = 0.0
+	_tg[P_HEAD_Z] = -_tg[P_ROLL] * 0.7
+
+	# wings: the model's own pose is already open, so hovering only breathes a
+	# little; flying opens them wider and beats them up and down
+	_tg[P_WING_Y] = lerpf(breeze * 0.05, 0.05 + flap * 0.30, fly)
+	_tg[P_WING_Z] = lerpf(breeze * 0.03, 0.28, fly)
+
+
 ## Jump: arms up + stretch while rising, arms out while falling.
 func _pose_air(vy: float) -> void:
 	var f := clampf((4.0 - vy) / 10.0, 0.0, 1.0) # 0 = rising fast ... 1 = falling
@@ -426,6 +605,9 @@ func _pose_air(vy: float) -> void:
 	_tg[P_LEAN] = lerpf(-0.05, 0.09, f)
 	_tg[P_HEAD_X] = lerpf(-0.18, 0.05, f)
 	_tg[P_SQUASH] = lerpf(0.07, 0.02, f)
+	if walk_style == 3:
+		_tg[P_WING_Z] = lerpf(0.7, 0.3, f)
+		_tg[P_WING_Y] = 0.0
 
 
 ## Layered on top of the ground pose for a moment after touching down.
@@ -522,6 +704,51 @@ func _dance_robot() -> float:
 	_tg[P_HEAD_X] = float(p[8])
 	_tg[P_BOB] = -0.05 * float(idx % 2)
 	return 40.0
+
+
+# -------------------------------------------------------------------- wings
+
+## Shows / hides the golden angel wings (built the first time they're needed).
+func _set_wings(on: bool) -> void:
+	if on and _wing_a == null and upper != null and not _wings_missing:
+		_wing_a = _make_wing(1.0)
+		_wing_b = _make_wing(-1.0)
+		if _wing_a == null or _wing_b == null:
+			_wing_a = null
+			_wing_b = null
+			_wings_missing = true
+		else:
+			upper.add_child(_wing_a)
+			upper.add_child(_wing_b)
+	if _wing_a:
+		_wing_a.visible = on
+		_wing_b.visible = on
+
+
+## Builds one wing (side = +1 -> "WingA", -1 -> "WingB") from the imported model.
+## The returned pivot sits at the wing's root on the upper back, so rotating it
+## opens / beats the whole wing from there. Returns null if the model isn't
+## available (e.g. the project hasn't been opened in the editor yet).
+func _make_wing(side: float) -> Node3D:
+	if not ResourceLoader.exists(WING_MODEL):
+		return null
+	var scene = load(WING_MODEL)
+	if not (scene is PackedScene):
+		return null
+	var inst: Node = scene.instantiate()
+	var part: Node = inst.find_child("WingA" if side > 0.0 else "WingB", true, false)
+	if part == null:
+		inst.free()
+		return null
+	part.get_parent().remove_child(part)
+	part.owner = null
+	inst.free()
+	for mi in part.find_children("*", "MeshInstance3D", true, false):
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var pivot := Node3D.new()
+	pivot.position = Vector3(side * 0.10, 0.58, -0.32)
+	pivot.add_child(part)
+	return pivot
 
 
 # --------------------------------------------------------------------- aura
